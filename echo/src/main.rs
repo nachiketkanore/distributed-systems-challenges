@@ -1,7 +1,7 @@
+use crate::Body::{EchoOk, InitOk};
+use serde::{Deserialize, Serialize};
 use std::io;
 use std::io::{BufRead, Write};
-use serde::{Deserialize, Serialize};
-use crate::Body::{EchoOk, InitOk};
 
 // generic type for json received for all problems
 // use this as a template
@@ -24,15 +24,10 @@ enum Body {
     },
     // response for the type = "init"
     #[serde(rename = "init_ok")]
-    InitOk {
-        in_reply_to: u64,
-    },
+    InitOk { in_reply_to: u64 },
     // type = "echo" for this problem
     #[serde(rename = "echo")]
-    Echo {
-        msg_id: u64,
-        echo: String,
-    },
+    Echo { msg_id: u64, echo: String },
     // response for the type = "echo"
     #[serde(rename = "echo_ok")]
     EchoOk {
@@ -46,9 +41,8 @@ enum Body {
         in_reply_to: u64,
         code: u64,
         text: String,
-    }
+    },
 }
-
 
 fn main() -> anyhow::Result<()> {
     let stdin = io::stdin();
@@ -70,7 +64,7 @@ fn main() -> anyhow::Result<()> {
                     dest: input.src,
                     body: InitOk {
                         in_reply_to: msg_id,
-                    }
+                    },
                 };
                 print_and_flush(output)?;
             }
@@ -81,18 +75,18 @@ fn main() -> anyhow::Result<()> {
                     body: EchoOk {
                         msg_id,
                         in_reply_to: msg_id,
-                        echo
-                    }
+                        echo,
+                    },
                 };
                 print_and_flush(output)?;
             }
             Body::InitOk { .. } => {
                 eprintln!("{}", "Impossible input");
-            },
+            }
             Body::EchoOk { .. } => {
                 eprintln!("{}", "Impossible input");
-            },
-            Body::Error { text, ..} => {
+            }
+            Body::Error { text, .. } => {
                 eprintln!("{}", text);
             }
         }
