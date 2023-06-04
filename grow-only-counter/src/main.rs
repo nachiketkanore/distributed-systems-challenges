@@ -102,19 +102,41 @@ fn main() -> anyhow::Result<()> {
     let (msg_sender, msg_receiver): (Sender<Message>, Receiver<Message>) = channel();
 
     let handler = std::thread::spawn(move || -> anyhow::Result<()> {
-        for msg in msg_receiver {
-            let checker = acknowledged_messages_secondary.lock().unwrap();
-            match msg.body {
-                Body::InternalMessage { msg_id, add_delta } => {
-                    if !checker.contains(&msg_id) {
-                        let serialized_output = serde_json::to_string(&msg)?;
-                        println!("{}", serialized_output);
+        let mut all_messages = HashSet::<Message>::new();
+        loop {
+            for msg in &all_messages {
+                match msg.body {
+                    Body::InternalMessage { msg_id, add_delta } => {
+                        let checker = acknowledged_messages_secondary.lock().unwrap();
+                        if !checker.contains(&msg_id) {
+                            let serialized_output = serde_json::to_string(&msg)?;
+                            println!("{}", serialized_output);
+                        }
                     }
+                    _ => panic!("invalid internal message sent")
                 }
-                _ => panic!("invalid internal message sent")
             }
-            drop(checker);
-            std::thread::sleep(Duration::from_millis(30));
+            for msg in msg_receiver.iter().take(100) {
+                match msg.body {
+                    Body::InternalMessage { msg_id, add_delta } => {
+                        let checker = acknowledged_messages_secondary.lock().unwrap();
+                        if !checker.contains(&msg_id) {
+                            let serialized_output = serde_json::to_string(&msg)?;
+                            println!("{}", serialized_output);
+                            // it might happen that this message is not propagated to other node
+                            // in case of network partition
+                            // let's store all messages that we are sending
+                            all_messages.insert(msg);
+                        } else {
+                            // remove from all_messages
+                            all_messages.remove(&msg);
+                        }
+                    }
+                    _ => panic!("invalid internal message sent")
+                }
+                std::thread::sleep(Duration::from_millis(30));
+            }
+
         }
         Ok(())
     });
