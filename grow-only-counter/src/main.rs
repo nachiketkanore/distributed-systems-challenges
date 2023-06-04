@@ -1,25 +1,28 @@
-use crate::Body::{AddOk, InitOk, ReadOk};
+use std::collections::HashSet;
+use crate::Body::{AddOk, InitOk, InternalMessage, InternalMessageOk, ReadOk};
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::io::{BufRead, Read, Write};
 use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::Duration;
 use anyhow::Error;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Eq, Hash, PartialEq)]
 struct Message {
     src: String,
     dest: String,
     body: Body,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Eq, Hash, PartialEq)]
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
 enum Body {
     Init {
         msg_id: u64,
-        node_id: String,       // this node's id
+        node_id: String,
+        // this node's id
         node_ids: Vec<String>, // all nodes in the current cluster
     },
     InitOk {
@@ -47,7 +50,11 @@ enum Body {
         text: String,
     },
     InternalMessage {
-        value: u64,
+        msg_id: u64,
+        add_delta: u64,
+    },
+    InternalMessageOk {
+        msg_id: u64
     },
 }
 
@@ -70,7 +77,7 @@ fn main() -> anyhow::Result<()> {
     stdin.read_line(&mut line)?;
     let info: Message = serde_json::from_str(&line)?;
     match info.body {
-        Body::Init {node_id, node_ids, msg_id} => {
+        Body::Init { node_id, node_ids, msg_id } => {
             this_node = node_id;
             cluster_nodes = node_ids;
             let output: Message = Message {
@@ -81,7 +88,7 @@ fn main() -> anyhow::Result<()> {
                 },
             };
             print_and_flush(output)?;
-        },
+        }
         _ => {
             panic!("expected init message at first");
         }
@@ -89,28 +96,30 @@ fn main() -> anyhow::Result<()> {
     // process init message
 
     let value_main = Arc::new(Mutex::new(0u64));
-    let value_secondary = Arc::clone(&value_main);
+    let acknowledged_messages_main = Arc::new(Mutex::new(HashSet::<u64>::new()));
+    let acknowledged_messages_secondary = Arc::clone(&acknowledged_messages_main);
+
+    let (msg_sender, msg_receiver): (Sender<Message>, Receiver<Message>) = channel();
 
     let handler = std::thread::spawn(move || -> anyhow::Result<()> {
-        loop {
-            let value = value_secondary.lock().unwrap();
-            for cluster_node in &cluster_nodes {
-                if *cluster_node != this_node {
-                    let msg: Message = Message {
-                        src: this_node.clone(),
-                        dest: (*cluster_node).clone(),
-                        body: Body::InternalMessage { value: *value },
-                    };
-                    let serialized_output = serde_json::to_string(&msg)?;
-                    println!("{}", serialized_output);
-                    // print_and_flush(msg)?;
+        for msg in msg_receiver {
+            let checker = acknowledged_messages_secondary.lock().unwrap();
+            match msg.body {
+                Body::InternalMessage { msg_id, add_delta } => {
+                    if !checker.contains(&msg_id) {
+                        let serialized_output = serde_json::to_string(&msg)?;
+                        println!("{}", serialized_output);
+                    }
                 }
+                _ => panic!("invalid internal message sent")
             }
-            drop(value);
-            std::thread::sleep(Duration::from_millis(200));
+            drop(checker);
+            std::thread::sleep(Duration::from_millis(30));
         }
         Ok(())
     });
+
+    let mut my_msg_id = 0;
 
     for line in stdin.lock().lines() {
         let input: Message = serde_json::from_str(&line?)?;
@@ -141,6 +150,23 @@ fn main() -> anyhow::Result<()> {
                     },
                 };
                 print_and_flush(output)?;
+
+                // send messages to all other nodes to add delta in their counter
+                // using messaging queue for this
+                for cluster_node in &cluster_nodes {
+                    if *cluster_node != this_node {
+                        let msg: Message = Message {
+                            src: this_node.clone(),
+                            dest: (*cluster_node).clone(),
+                            body: InternalMessage {
+                                msg_id: my_msg_id,
+                                add_delta: delta,
+                            },
+                        };
+                        msg_sender.send(msg)?;
+                        my_msg_id += 1;
+                    }
+                }
             }
             InitOk { .. } | ReadOk { .. } | AddOk { .. } => {
                 eprintln!("{}", "Impossible input");
@@ -148,11 +174,23 @@ fn main() -> anyhow::Result<()> {
             Body::Error { text, .. } => {
                 eprintln!("{}", text);
             }
-            Body::InternalMessage { value } => {
+            Body::InternalMessage { msg_id, add_delta } => {
                 let mut my_value = value_main.lock().unwrap();
-                if *my_value < value {
-                    *my_value = value;
-                }
+                *my_value += add_delta;
+                let output: Message = Message {
+                    src: input.dest,
+                    dest: input.src,
+                    body: InternalMessageOk {
+                        msg_id
+                    },
+                };
+                print_and_flush(output)?;
+            }
+            Body::InternalMessageOk { msg_id } => {
+                let mut checker = acknowledged_messages_main.lock().unwrap();
+                checker.insert(msg_id);
+                // ack_sender.send(msg_id);
+                // acknowledged_messages.insert(msg_id);
             }
         }
     }
