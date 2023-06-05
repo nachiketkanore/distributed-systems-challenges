@@ -57,7 +57,6 @@ enum Body {
         text: String,
     },
     InternalMessage {
-        msg_id: u64,
         new_message: u64,
     },
 }
@@ -132,7 +131,6 @@ fn main() -> anyhow::Result<()> {
                             src: this_node_id.clone(),
                             dest: (*cluster_node).clone(),
                             body: InternalMessage {
-                                msg_id,
                                 new_message: message,
                             },
                         };
