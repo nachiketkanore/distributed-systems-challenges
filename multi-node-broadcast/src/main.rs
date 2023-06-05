@@ -1,9 +1,10 @@
 use crate::Body::{BroadcastOk, InitOk, InternalMessage, ReadOk, TopologyOk};
-use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::io::{BufRead, Write};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::time::Duration;
 
 // generic type for json received for all problems
 // use this as a template
@@ -72,8 +73,20 @@ fn main() -> anyhow::Result<()> {
         Ok(())
     };
 
+    let (msg_sender, msg_receiver): (Sender<Message>, Receiver<Message>) = channel();
+
+    let handler = std::thread::spawn(move || -> anyhow::Result<()> {
+        loop {
+            for msg in msg_receiver.iter().take(50) {
+                let serialized_output = serde_json::to_string(&msg)?;
+                println!("{}", serialized_output);
+            }
+            std::thread::sleep(Duration::from_millis(400));
+        }
+        Ok(())
+    });
+
     let mut msgs = HashSet::new();
-    let mut topology_graph: HashMap<String, Vec<String>> = HashMap::new();
     let mut this_node_id = String::new();
     let mut cluster_nodes = Vec::<String>::new();
 
@@ -121,27 +134,29 @@ fn main() -> anyhow::Result<()> {
                     },
                 };
                 print_and_flush(output)?;
-                // brute force - try 1
+
+                // better solution
                 // send internal message to all other nodes in the cluster
                 // to add a new message in their state
-
+                // frequently send messages to all the other nodes in the cluster
+                // using mpsc::channels for inter-thread communication
                 for cluster_node in &cluster_nodes {
                     if *cluster_node != this_node_id {
-                        let internalMessage: Message = Message {
+                        let internal_msg: Message = Message {
                             src: this_node_id.clone(),
                             dest: (*cluster_node).clone(),
                             body: InternalMessage {
                                 new_message: message,
                             },
                         };
-                        let serialized_output = serde_json::to_string(&internalMessage)?;
-                        println!("{}", serialized_output);
+                        msg_sender.send(internal_msg)?;
+                        // let serialized_output = serde_json::to_string(&internalMessage)?;
+                        // println!("{}", serialized_output);
                         // print_and_flush(internalMessage)?;
                     }
                 }
             }
-            Body::Topology { msg_id, topology } => {
-                topology_graph = topology;
+            Body::Topology { msg_id, .. } => {
                 let output: Message = Message {
                     src: input.dest,
                     dest: input.src,
@@ -163,5 +178,6 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
+    let _ = handler.join().unwrap();
     Ok(())
 }
