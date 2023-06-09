@@ -1,1 +1,16 @@
 # Distributed-Systems-Challenges
+
+- [x] [Echo](https://fly.io/dist-sys/1)
+- [x] [Unique ID Generation](https://fly.io/dist-sys/2/)
+- [x] [Single-Node Broadcast](https://fly.io/dist-sys/3a/)
+- [x] [Multi-Node Broadcast](https://fly.io/dist-sys/3b/)
+- [ ] [Fault Tolerant Broadcast](https://fly.io/dist-sys/3c/)
+- [ ] [Efficient Broadcast, Part I](https://fly.io/dist-sys/3d/)
+- [ ] [Efficient Broadcast, Part II](https://fly.io/dist-sys/3e/)
+- [x] [Grow-Only Counter](https://fly.io/dist-sys/4/)
+- [ ] [Single-Node Kafka-Style Log](https://fly.io/dist-sys/5a/)
+- [ ] [Multi-Node Kafka-Style Log](https://fly.io/dist-sys/5b/)
+- [ ] [Efficient Kafka-Style Log](https://fly.io/dist-sys/5c/)
+- [ ] [Single-Node, Totally-Available Transactions](https://fly.io/dist-sys/6a/)
+- [ ] [Totally-Available, Read Uncommitted Transactions](https://fly.io/dist-sys/6b/)
+- [ ] [Totally-Available, Read Committed Transactions](https://fly.io/dist-sys/6c/)
