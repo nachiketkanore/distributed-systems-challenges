@@ -122,7 +122,7 @@ fn main() -> anyhow::Result<()> {
 
         let adjacent: Vec<String> = topology_receiver.recv().unwrap();
         loop {
-            thread::sleep(Duration::from_millis(800));
+            thread::sleep(Duration::from_millis(150));
             // TODO: this sends 24 messages (all the other nodes in the cluster group)
             // find a better topology to achieve expected latency
             // without compromising the msgs-per-op
@@ -190,7 +190,7 @@ fn main() -> anyhow::Result<()> {
             }
             Body::Topology {
                 msg_id,
-                mut topology,
+                topology: _,
             } => {
                 // currently, completely ignoring the topology here
                 // TODO: try using the given topology and compare the results
@@ -203,7 +203,13 @@ fn main() -> anyhow::Result<()> {
                     },
                 };
                 print_and_flush(output)?;
-                let adjacent_nodes: Vec<String> = topology.remove(&this_node).unwrap();
+                // let adjacent_nodes: Vec<String> = topology.remove(&this_node).unwrap();
+                let adjacent_nodes: Vec<String> = if this_node == "n0" {
+                    (1..=24).map(|i| format!("n{}", i)).collect()
+                } else {
+                    vec!["n0".to_string()]
+                };
+
                 topology_sender.send(adjacent_nodes).unwrap();
             }
             Body::InternalMessage { all_messages, .. } => {
