@@ -5,7 +5,7 @@
 - [x] [Single-Node Broadcast](https://fly.io/dist-sys/3a/)
 - [x] [Multi-Node Broadcast](https://fly.io/dist-sys/3b/)
 - [x] [Fault Tolerant Broadcast](https://fly.io/dist-sys/3c/)
-- [ ] [Efficient Broadcast, Part I](https://fly.io/dist-sys/3d/)
+- [x] [Efficient Broadcast, Part I](https://fly.io/dist-sys/3d/)
 - [ ] [Efficient Broadcast, Part II](https://fly.io/dist-sys/3e/)
 - [x] [Grow-Only Counter](https://fly.io/dist-sys/4/)
 - [ ] [Single-Node Kafka-Style Log](https://fly.io/dist-sys/5a/)
