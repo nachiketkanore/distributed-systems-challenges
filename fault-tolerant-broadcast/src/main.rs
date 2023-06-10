@@ -2,7 +2,6 @@ use crate::Body::{BroadcastOk, InitOk, InternalMessage, ReadOk, TopologyOk};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Write};
-use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{io, thread};
@@ -74,8 +73,6 @@ fn main() -> anyhow::Result<()> {
         Ok(())
     };
 
-    let (msg_sender, msg_receiver): (Sender<Message>, Receiver<Message>) = channel();
-
     // naive solution:
     // sending all messages to other nodes in the cluster
     // in some frequent interval
@@ -112,12 +109,13 @@ fn main() -> anyhow::Result<()> {
     }
     // process init message
 
+    #[allow(unreachable_code)]
     let handler = std::thread::spawn(move || -> anyhow::Result<()> {
         // batch thread to send current node's all messages to everyone in the cluster
         // every 500 ms
         loop {
             for cluster_node in &cluster_nodes {
-                if *cluster_node != this_node_id {
+                if this_node_id != *cluster_node {
                     let my_msgs = msgs_secondary.lock().unwrap();
                     let internal_msg: Message = Message {
                         src: this_node_id.clone(),
@@ -132,7 +130,7 @@ fn main() -> anyhow::Result<()> {
                     println!("{}", serialized_output);
                 }
             }
-            thread::sleep(Duration::from_millis(500));
+            thread::sleep(Duration::from_millis(800));
         }
         Ok(())
     });
@@ -195,7 +193,7 @@ fn main() -> anyhow::Result<()> {
                 my_msgs.extend(all_messages);
             }
             InitOk { .. } | ReadOk { .. } | BroadcastOk { .. } | TopologyOk { .. } => {
-                eprintln!("{}", "Impossible input");
+                eprintln!("Impossible input");
             }
             Body::Error { text, .. } => {
                 eprintln!("{}", text);
