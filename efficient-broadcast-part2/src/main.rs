@@ -80,8 +80,8 @@ fn main() -> anyhow::Result<()> {
 
     let msgs = Arc::new(Mutex::new(HashSet::new()));
     let msgs_secondary = Arc::clone(&msgs);
-    let mut this_node_id = String::new();
-    let mut this_node = String::new();
+    let this_node_id;
+    let this_node;
     // let mut cluster_nodes = Vec::<String>::new();
 
     // process init message
