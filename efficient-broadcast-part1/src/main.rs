@@ -2,6 +2,7 @@ use crate::Body::{BroadcastOk, InitOk, InternalMessage, ReadOk, TopologyOk};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Write};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{io, thread};
@@ -80,7 +81,8 @@ fn main() -> anyhow::Result<()> {
     let msgs = Arc::new(Mutex::new(HashSet::new()));
     let msgs_secondary = Arc::clone(&msgs);
     let mut this_node_id = String::new();
-    let mut cluster_nodes = Vec::<String>::new();
+    let mut this_node = String::new();
+    // let mut cluster_nodes = Vec::<String>::new();
 
     // process init message
     let mut line = String::new();
@@ -89,11 +91,12 @@ fn main() -> anyhow::Result<()> {
     match info.body {
         Body::Init {
             node_id,
-            node_ids,
+            node_ids: _,
             msg_id,
         } => {
+            this_node = node_id.clone();
             this_node_id = node_id;
-            cluster_nodes = node_ids;
+            // cluster_nodes = node_ids;
             let output: Message = Message {
                 src: info.dest,
                 dest: info.src,
@@ -109,13 +112,21 @@ fn main() -> anyhow::Result<()> {
     }
     // process init message
 
+    let (topology_sender, topology_receiver): (Sender<Vec<String>>, Receiver<Vec<String>>) =
+        channel();
+
     #[allow(unreachable_code)]
     let handler = std::thread::spawn(move || -> anyhow::Result<()> {
         // batch thread to send current node's all messages to everyone in the cluster
         // every 500 ms
+
+        let adjacent: Vec<String> = topology_receiver.recv().unwrap();
         loop {
-            thread::sleep(Duration::from_millis(400));
-            for cluster_node in &cluster_nodes {
+            thread::sleep(Duration::from_millis(800));
+            // TODO: this sends 24 messages (all the other nodes in the cluster group)
+            // find a better topology to achieve expected latency
+            // without compromising the msgs-per-op
+            for cluster_node in &adjacent {
                 if this_node_id != *cluster_node {
                     let my_msgs = msgs_secondary.lock().unwrap();
                     let internal_msg: Message = Message {
@@ -177,7 +188,12 @@ fn main() -> anyhow::Result<()> {
                 };
                 print_and_flush(output)?;
             }
-            Body::Topology { msg_id, .. } => {
+            Body::Topology {
+                msg_id,
+                mut topology,
+            } => {
+                // currently, completely ignoring the topology here
+                // TODO: try using the given topology and compare the results
                 let output: Message = Message {
                     src: input.dest,
                     dest: input.src,
@@ -187,6 +203,8 @@ fn main() -> anyhow::Result<()> {
                     },
                 };
                 print_and_flush(output)?;
+                let adjacent_nodes: Vec<String> = topology.remove(&this_node).unwrap();
+                topology_sender.send(adjacent_nodes).unwrap();
             }
             Body::InternalMessage { all_messages, .. } => {
                 let mut my_msgs = msgs.lock().unwrap();
