@@ -1,10 +1,11 @@
 use crate::Body::{BroadcastOk, InitOk, InternalMessage, ReadOk, TopologyOk};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::io;
 use std::io::{BufRead, Write};
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::{io, thread};
 
 // generic type for json received for all problems
 // use this as a template
@@ -79,39 +80,80 @@ fn main() -> anyhow::Result<()> {
     // sending all messages to other nodes in the cluster
     // in some frequent interval
 
+    let msgs = Arc::new(Mutex::new(HashSet::new()));
+    let msgs_secondary = Arc::clone(&msgs);
+    let mut this_node_id = String::new();
+    let mut cluster_nodes = Vec::<String>::new();
+
+    // process init message
+    let mut line = String::new();
+    stdin.read_line(&mut line)?;
+    let info: Message = serde_json::from_str(&line)?;
+    match info.body {
+        Body::Init {
+            node_id,
+            node_ids,
+            msg_id,
+        } => {
+            this_node_id = node_id;
+            cluster_nodes = node_ids;
+            let output: Message = Message {
+                src: info.dest,
+                dest: info.src,
+                body: InitOk {
+                    in_reply_to: msg_id,
+                },
+            };
+            print_and_flush(output)?;
+        }
+        _ => {
+            panic!("expected init message at first");
+        }
+    }
+    // process init message
+
     let handler = std::thread::spawn(move || -> anyhow::Result<()> {
-        for msg in msg_receiver {
-            let serialized_output = serde_json::to_string(&msg)?;
-            println!("{}", serialized_output);
-            std::thread::sleep(Duration::from_millis(250));
+        // batch thread to send current node's all messages to everyone in the cluster
+        // every 500 ms
+        loop {
+            for cluster_node in &cluster_nodes {
+                if *cluster_node != this_node_id {
+                    let my_msgs = msgs_secondary.lock().unwrap();
+                    let internal_msg: Message = Message {
+                        src: this_node_id.clone(),
+                        dest: (*cluster_node).clone(),
+                        body: InternalMessage {
+                            all_messages: my_msgs.clone(),
+                        },
+                    };
+                    drop(my_msgs);
+
+                    let serialized_output = serde_json::to_string(&internal_msg)?;
+                    println!("{}", serialized_output);
+                }
+            }
+            thread::sleep(Duration::from_millis(500));
         }
         Ok(())
     });
 
-    let mut msgs = HashSet::new();
-    let mut this_node_id = String::new();
-    let mut cluster_nodes = Vec::<String>::new();
-
     for line in stdin.lock().lines() {
         let input: Message = serde_json::from_str(&line?)?;
         match input.body {
-            // this message is important
-            // has info { node_id of current node, node_ids of all nodes in the current cluster }
-            Body::Init {
-                msg_id,
-                node_id,
-                node_ids,
-            } => {
-                let output: Message = Message {
-                    src: input.dest,
-                    dest: input.src,
-                    body: InitOk {
-                        in_reply_to: msg_id,
-                    },
-                };
-                this_node_id = node_id;
-                cluster_nodes = node_ids;
-                print_and_flush(output)?;
+            Body::Init { .. } => {
+                // already process this message
+                // will never receive this message again
+                // let output: Message = Message {
+                //     src: input.dest,
+                //     dest: input.src,
+                //     body: InitOk {
+                //         in_reply_to: msg_id,
+                //     },
+                // };
+                // this_node_id = node_id;
+                // cluster_nodes = node_ids;
+                // print_and_flush(output)?;
+                panic!("init message sent twice");
             }
             Body::Read { msg_id } => {
                 let output: Message = Message {
@@ -120,13 +162,13 @@ fn main() -> anyhow::Result<()> {
                     body: ReadOk {
                         msg_id,
                         in_reply_to: msg_id,
-                        messages: msgs.clone(),
+                        messages: msgs.lock().unwrap().clone(),
                     },
                 };
                 print_and_flush(output)?;
             }
             Body::Broadcast { msg_id, message } => {
-                msgs.insert(message);
+                msgs.lock().unwrap().insert(message);
                 let output: Message = Message {
                     src: input.dest,
                     dest: input.src,
@@ -136,27 +178,6 @@ fn main() -> anyhow::Result<()> {
                     },
                 };
                 print_and_flush(output)?;
-
-                // better solution
-                // send internal message to all other nodes in the cluster
-                // to add a new message in their state
-                // frequently send messages to all the other nodes in the cluster
-                // using mpsc::channels for inter-thread communication
-                for cluster_node in &cluster_nodes {
-                    if *cluster_node != this_node_id {
-                        let internal_msg: Message = Message {
-                            src: this_node_id.clone(),
-                            dest: (*cluster_node).clone(),
-                            body: InternalMessage {
-                                all_messages: msgs.clone(),
-                            },
-                        };
-                        msg_sender.send(internal_msg)?;
-                        // let serialized_output = serde_json::to_string(&internalMessage)?;
-                        // println!("{}", serialized_output);
-                        // print_and_flush(internalMessage)?;
-                    }
-                }
             }
             Body::Topology { msg_id, .. } => {
                 let output: Message = Message {
@@ -170,7 +191,8 @@ fn main() -> anyhow::Result<()> {
                 print_and_flush(output)?;
             }
             Body::InternalMessage { all_messages, .. } => {
-                msgs.extend(all_messages);
+                let mut my_msgs = msgs.lock().unwrap();
+                my_msgs.extend(all_messages);
             }
             InitOk { .. } | ReadOk { .. } | BroadcastOk { .. } | TopologyOk { .. } => {
                 eprintln!("{}", "Impossible input");
@@ -183,3 +205,10 @@ fn main() -> anyhow::Result<()> {
     let _ = handler.join().unwrap();
     Ok(())
 }
+// Solution description:
+// batch process to send current node's all messages to every other node in the cluster
+// every 500 ms
+// this ensures we are sending all the messages from given node to every other node in the cluster
+// even in the case of network partitions, eventual consistency will be observed
+// because even if some of the internal messages are not received on the other end,
+// they will be in consensus after the network partition is restored and all the messages are sent again
