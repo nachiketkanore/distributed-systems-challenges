@@ -1,12 +1,10 @@
-use std::collections::HashSet;
-use crate::Body::{AddOk, InitOk, InternalMessage, InternalMessageOk, ReadOk};
+use crate::Body::{AddOk, InitOk, InternalMessage, ReadOk};
 use serde::{Deserialize, Serialize};
-use std::io;
-use std::io::{BufRead, Read, Write};
+use std::collections::HashMap;
+use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::Duration;
-use anyhow::Error;
+use std::{io, thread};
 
 #[derive(Serialize, Deserialize, Debug, Eq, Hash, PartialEq)]
 struct Message {
@@ -51,10 +49,7 @@ enum Body {
     },
     InternalMessage {
         msg_id: u64,
-        add_delta: u64,
-    },
-    InternalMessageOk {
-        msg_id: u64
+        latest_value: u64,
     },
 }
 
@@ -69,17 +64,25 @@ fn main() -> anyhow::Result<()> {
         Ok(())
     };
 
-    let mut this_node = String::new();
-    let mut cluster_nodes = Vec::<String>::new();
+    let this_node;
+    let cluster_nodes;
+    let this_node_clone;
+    let cluster_nodes_clone;
 
-    // process init message
+    // process init message - start
     let mut line = String::new();
     stdin.read_line(&mut line)?;
     let info: Message = serde_json::from_str(&line)?;
     match info.body {
-        Body::Init { node_id, node_ids, msg_id } => {
+        Body::Init {
+            node_id,
+            node_ids,
+            msg_id,
+        } => {
             this_node = node_id;
+            this_node_clone = this_node.clone();
             cluster_nodes = node_ids;
+            cluster_nodes_clone = cluster_nodes.clone();
             let output: Message = Message {
                 src: info.dest,
                 dest: info.src,
@@ -93,76 +96,65 @@ fn main() -> anyhow::Result<()> {
             panic!("expected init message at first");
         }
     }
-    // process init message
+    // process init message - end
 
-    let value_main = Arc::new(Mutex::new(0u64));
-    let acknowledged_messages_main = Arc::new(Mutex::new(HashSet::<u64>::new()));
-    let acknowledged_messages_secondary = Arc::clone(&acknowledged_messages_main);
+    let my_value = Arc::new(Mutex::new(0u64));
+    let my_value_secondary = Arc::clone(&my_value);
+    let mut latest_values_for = HashMap::<String, u64>::new();
 
-    let (msg_sender, msg_receiver): (Sender<Message>, Receiver<Message>) = channel();
-
+    #[allow(unreachable_code)]
     let handler = std::thread::spawn(move || -> anyhow::Result<()> {
-        let mut all_messages = HashSet::<Message>::new();
+        let mut my_msg_id = 0;
         loop {
-            for msg in &all_messages {
-                match msg.body {
-                    Body::InternalMessage { msg_id, add_delta } => {
-                        let checker = acknowledged_messages_secondary.lock().unwrap();
-                        if !checker.contains(&msg_id) {
-                            let serialized_output = serde_json::to_string(&msg)?;
-                            println!("{}", serialized_output);
-                        }
-                    }
-                    _ => panic!("invalid internal message sent")
+            thread::sleep(Duration::from_millis(20));
+            for cluster_node in &cluster_nodes_clone {
+                if *cluster_node != this_node_clone {
+                    let msg: Message = Message {
+                        src: this_node_clone.clone(),
+                        dest: cluster_node.clone(),
+                        body: InternalMessage {
+                            msg_id: my_msg_id,
+                            latest_value: *my_value_secondary.lock().unwrap(),
+                        },
+                    };
+                    my_msg_id += 1;
+                    let serialized_msg = serde_json::to_string(&msg)?;
+                    println!("{}", serialized_msg);
                 }
             }
-            for msg in msg_receiver.iter().take(100) {
-                match msg.body {
-                    Body::InternalMessage { msg_id, add_delta } => {
-                        let checker = acknowledged_messages_secondary.lock().unwrap();
-                        if !checker.contains(&msg_id) {
-                            let serialized_output = serde_json::to_string(&msg)?;
-                            println!("{}", serialized_output);
-                            // it might happen that this message is not propagated to other node
-                            // in case of network partition
-                            // let's store all messages that we are sending
-                            all_messages.insert(msg);
-                        } else {
-                            // remove from all_messages
-                            all_messages.remove(&msg);
-                        }
-                    }
-                    _ => panic!("invalid internal message sent")
-                }
-                std::thread::sleep(Duration::from_millis(30));
-            }
-
         }
         Ok(())
     });
 
-    let mut my_msg_id = 0;
-
     for line in stdin.lock().lines() {
         let input: Message = serde_json::from_str(&line?)?;
         match input.body {
-            Body::Init { .. } => { panic!("already done"); }
+            Body::Init { .. } => {
+                panic!("already done");
+            }
             Body::Read { msg_id } => {
-                let value = value_main.lock().unwrap();
+                let mut sum_of_all = *my_value.lock().unwrap();
+                for cluster_node in &cluster_nodes {
+                    if *cluster_node != this_node {
+                        if let Some(value) = latest_values_for.get(cluster_node) {
+                            sum_of_all += value;
+                        }
+                    }
+                }
+
                 let output: Message = Message {
                     src: input.dest,
                     dest: input.src,
                     body: ReadOk {
                         msg_id,
                         in_reply_to: msg_id,
-                        value: *value,
+                        value: sum_of_all,
                     },
                 };
                 print_and_flush(output)?;
             }
             Body::Add { msg_id, delta, .. } => {
-                let mut value = value_main.lock().unwrap();
-                *value += delta;
+                *my_value.lock().unwrap() += delta;
                 let output: Message = Message {
                     src: input.dest,
                     dest: input.src,
@@ -172,23 +164,6 @@ fn main() -> anyhow::Result<()> {
                     },
                 };
                 print_and_flush(output)?;
-
-                // send messages to all other nodes to add delta in their counter
-                // using messaging queue for this
-                for cluster_node in &cluster_nodes {
-                    if *cluster_node != this_node {
-                        let msg: Message = Message {
-                            src: this_node.clone(),
-                            dest: (*cluster_node).clone(),
-                            body: InternalMessage {
-                                msg_id: my_msg_id,
-                                add_delta: delta,
-                            },
-                        };
-                        msg_sender.send(msg)?;
-                        my_msg_id += 1;
-                    }
-                }
             }
             InitOk { .. } | ReadOk { .. } | AddOk { .. } => {
                 eprintln!("{}", "Impossible input");
@@ -196,23 +171,11 @@ fn main() -> anyhow::Result<()> {
             Body::Error { text, .. } => {
                 eprintln!("{}", text);
             }
-            Body::InternalMessage { msg_id, add_delta } => {
-                let mut my_value = value_main.lock().unwrap();
-                *my_value += add_delta;
-                let output: Message = Message {
-                    src: input.dest,
-                    dest: input.src,
-                    body: InternalMessageOk {
-                        msg_id
-                    },
-                };
-                print_and_flush(output)?;
-            }
-            Body::InternalMessageOk { msg_id } => {
-                let mut checker = acknowledged_messages_main.lock().unwrap();
-                checker.insert(msg_id);
-                // ack_sender.send(msg_id);
-                // acknowledged_messages.insert(msg_id);
+            Body::InternalMessage {
+                msg_id: _,
+                latest_value,
+            } => {
+                *latest_values_for.entry(input.src).or_insert(0) = latest_value;
             }
         }
     }
