@@ -14,3 +14,7 @@
 - [ ] [Single-Node, Totally-Available Transactions](https://fly.io/dist-sys/6a/)
 - [ ] [Totally-Available, Read Uncommitted Transactions](https://fly.io/dist-sys/6b/)
 - [ ] [Totally-Available, Read Committed Transactions](https://fly.io/dist-sys/6c/)
+
+
+# Checkout my [YouTube Playlist](https://youtube.com/playlist?list=PL6h2Gn3JK5LkmdqWWpxQROZV3H0U0opP8) for explanations:
+![image](https://github.com/nachiketkanore/distributed-systems-challenges/assets/44920607/2fb45413-8a2b-4380-b5e5-92c4d9f7f12d)
