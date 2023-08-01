@@ -1,0 +1,14 @@
+[package]
+name = "multi-node-kafka-style-log"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-trait = "0.1.72"
+maelstrom-node = "0.1.6"
+serde = { version = "1.0.180", features = ["derive"] }
+tokio-context = "0.1.3"
+
+[[bin]]
+name = "multi-kafka"
+path = "src/main.rs"
